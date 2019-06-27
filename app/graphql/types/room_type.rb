@@ -2,11 +2,11 @@ module Types
   class RoomType < BaseObject
     field :id, Integer, null: false
     field :title, String, null: false
-    field :latest_messages, [Types::MessageType], null: false
+    field :last_message, Types::MessageType, null: true
 
-    def latest_messages
+    def last_message
       repo = MessageRepository.new
-      repo.latest_for_room(room_id: object.id)
+      repo.last_for_room(room_id: object.id)
     end
   end
 end
