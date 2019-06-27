@@ -1,13 +1,26 @@
 module Types
   class QueryType < Types::BaseObject
-    # Add root-level fields here.
-    # They will be entry points for queries on your schema.
+    field :rooms, [Types::RoomType], null: false
+    def rooms
+      room_repository.all
+    end
 
-    # TODO: remove me
-    field :test_field, String, null: false,
-      description: "An example field added by the generator"
-    def test_field
-      "Hello World!"
+    field :messages_for_room, [Types::MessageType], null: false do
+      argument :room_id, Integer, required: true
+    end
+
+    def messages_for_room(room_id:)
+      message_repository.latest_for_room(room_id: room_id)
+    end
+
+    private
+
+    def room_repository
+      @room_repository ||= RoomRepository.new
+    end
+
+    def message_repository
+      @message_repository ||= MessageRepository.new
     end
   end
 end
