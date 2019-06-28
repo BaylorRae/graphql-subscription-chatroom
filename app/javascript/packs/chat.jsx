@@ -1,9 +1,16 @@
-import React, { useState } from 'react'
+import React, { useState, createContext, useContext } from 'react'
 import ReactDOM from 'react-dom'
 import { Router, Link } from '@reach/router'
 import ApolloClient from 'apollo-boost'
-import { ApolloProvider, Query } from 'react-apollo'
+import { ApolloProvider, Query, Mutation } from 'react-apollo'
 import gql from 'graphql-tag'
+
+const UserContext = createContext({ user: null, updateUser: () => true })
+
+function useUser() {
+  const { user, updateUser } = useContext(UserContext)
+  return { user, updateUser }
+}
 
 const client = new ApolloClient();
 
@@ -23,13 +30,25 @@ const GET_ROOMS = gql`
   }
 `
 
-const MESSAGES_FOR_ROOM = gql`
+const GET_MESSAGES_FOR_ROOM = gql`
   query ($roomId:Int!) {
     messagesForRoom(roomId:$roomId) {
       id
       user
       text
       createdAt
+    }
+  }
+`
+
+const ADD_MESSAGE_TO_ROOM = gql`
+  mutation ($roomId:Int!, $user:String!, $text:String!) {
+    messageCreate(roomId:$roomId, user:$user, text:$text) {
+      message {
+        id
+        user
+        text
+      }
     }
   }
 `
@@ -60,19 +79,37 @@ const RoomList = () => (
   </div>
 )
 
-const NewMessageForm = () => {
-  const [text, setText] = useState('')
+const NewMessageForm = ({ roomId }) => {
+  const [drafts, setDrafts] = useState({})
+  const { user } = useUser()
 
-  function onSubmit(e) {
-    e.preventDefault()
-    setText('')
+  function onChange(e) {
+    const value = e.currentTarget.value
+    setDrafts({...drafts, [roomId]: value})
+  }
+
+  function onSubmit(addTodo) {
+    return (e) => {
+      e.preventDefault()
+
+      if (!drafts[roomId] || drafts[roomId] === '') return
+
+      addTodo({ variables: { roomId: parseInt(roomId), user, text: drafts[roomId] } })
+        .then(({ data, error }) => {
+          setDrafts({...drafts, [roomId]: ''})
+        })
+    }
   }
 
   return (
-    <form className="bg-white border-top d-flex p-3" onSubmit={onSubmit}>
-      <input className="form-control" placeholder="Enter your message here." value={text} onChange={e => setText(e.currentTarget.value)} />
-      <button className="btn btn-primary ml-2">Post</button>
-    </form>
+    <Mutation mutation={ADD_MESSAGE_TO_ROOM}>
+      {(addTodo) => (
+        <form className="bg-white border-top d-flex p-3" onSubmit={onSubmit(addTodo)}>
+          <input className="form-control" placeholder="Enter your message here." value={drafts[roomId] || ''} onChange={onChange} />
+          <button className="btn btn-primary ml-2" disabled={!drafts[roomId] || drafts[roomId] === ''}>Post</button>
+        </form>
+      )}
+    </Mutation>
   )
 }
 
@@ -90,7 +127,7 @@ const Message = ({ user, text }) => (
 const MessageList = ({ roomId }) => (
   <div className="d-flex flex-column h-100">
     <div className="flex-grow-1 overflow-auto p-3 bg-light">
-      <Query query={MESSAGES_FOR_ROOM} variables={{ roomId: parseInt(roomId) }}>
+      <Query query={GET_MESSAGES_FOR_ROOM} variables={{ roomId: parseInt(roomId) }}>
         {({ loading, error, data }) => {
           if (loading || error) return null
 
@@ -101,33 +138,56 @@ const MessageList = ({ roomId }) => (
       </Query>
     </div>
 
-    <NewMessageForm />
+    <NewMessageForm roomId={roomId} />
   </div>
 )
 
-const App = () => (
-  <ApolloProvider client={client}>
-    <div className="container">
-      <div className="d-flex justify-content-between my-3">
-        <h1>Chat</h1>
-        <div>
-          <input className="form-control" placeholder="Username" />
-        </div>
-      </div>
+const UserInput = () => {
+  const { user, updateUser } = useUser()
+  const [ name, setName ] = useState(user)
 
-      <div className="row border rounded" style={{height: 600}}>
-        <div className="col-md-3 h-100 overflow-auto px-0 bg-dark">
-          <RoomList />
-        </div>
+  function onBlur() {
+    updateUser(name)
+  }
 
-        <div className="col-md-9 px-0 h-100">
-          <Router className="h-100">
-            <MessageList path="/room/:roomId" />
-          </Router>
+  function onChange(e) {
+    setName(e.currentTarget.value)
+  }
+
+  return (
+    <input type="text" className="form-control" placeholder="Username" value={name} onChange={onChange} onBlur={onBlur} />
+  )
+}
+
+const App = () => {
+  const [user, setUser] = useState('')
+
+  return (
+    <UserContext.Provider value={{ user, updateUser: setUser }}>
+      <ApolloProvider client={client}>
+        <div className="container">
+          <div className="d-flex justify-content-between my-3">
+            <h1>Chat</h1>
+            <div>
+              <UserInput />
+            </div>
+          </div>
+
+          <div className="row border rounded" style={{height: 600}}>
+            <div className="col-md-3 h-100 overflow-auto px-0 bg-dark">
+              <RoomList />
+            </div>
+
+            <div className="col-md-9 px-0 h-100">
+              <Router className="h-100">
+                <MessageList path="/room/:roomId" />
+              </Router>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-  </ApolloProvider>
-)
+      </ApolloProvider>
+    </UserContext.Provider>
+  )
+}
 
 ReactDOM.render(<App />, document.querySelector('#app'))

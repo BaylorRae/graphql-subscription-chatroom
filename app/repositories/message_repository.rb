@@ -12,4 +12,10 @@ class MessageRepository
       .order(created_at: :asc)
       .limit(10)
   end
+
+  def create_in_room(room_id:, user:, text:)
+    Message.create!(room_id: room_id,
+                    user: user,
+                    text: text)
+  end
 end
