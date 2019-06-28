@@ -1,12 +1,9 @@
 import React, { useState, useEffect, createContext, useContext, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import { Router, Link } from '@reach/router'
-import { HttpLink, ApolloLink, InMemoryCache } from 'apollo-boost'
-import { ApolloClient } from 'apollo-client'
+import ApolloClient, { HttpLink, ApolloLink, InMemoryCache } from 'apollo-boost'
 import { ApolloProvider, Query, Mutation } from 'react-apollo'
 import gql from 'graphql-tag'
-import { createConsumer } from '@rails/actioncable';
-import ActionCableLink from 'graphql-ruby-client/subscriptions/ActionCableLink';
 
 const UserContext = createContext({ user: null, updateUser: () => true })
 
@@ -15,29 +12,7 @@ function useUser() {
   return { user, updateUser }
 }
 
-const cable = createConsumer()
-
-const httpLink = new HttpLink({
-  uri: '/graphql',
-  credentials: 'include'
-});
-
-const hasSubscriptionOperation = ({ query: { definitions } }) => {
-  return definitions.some(
-    ({ kind, operation }) => kind === 'OperationDefinition' && operation === 'subscription'
-  )
-}
-
-const link = ApolloLink.split(
-  hasSubscriptionOperation,
-  new ActionCableLink({cable}),
-  httpLink
-);
-
-const client = new ApolloClient({
-  link,
-  cache: new InMemoryCache()
-});
+const client = new ApolloClient();
 
 const GET_ROOMS = gql`
   query {
@@ -66,17 +41,6 @@ const GET_MESSAGES_FOR_ROOM = gql`
   }
 `
 
-const SUBSCRIBE_MESSAGES_FOR_ROOM = gql`
-  subscription ($roomId:Int!) {
-    messageAddedToRoom(roomId:$roomId) {
-      id
-      user
-      text
-      createdAt
-    }
-  }
-`
-
 const ADD_MESSAGE_TO_ROOM = gql`
   mutation ($roomId:Int!, $user:String!, $text:String!) {
     messageCreate(roomId:$roomId, user:$user, text:$text) {
@@ -89,30 +53,7 @@ const ADD_MESSAGE_TO_ROOM = gql`
   }
 `
 
-const Room = ({ id, title, lastMessage, subscribeToMore }) => {
-  useEffect(() => {
-    const unsubscribe = subscribeToMore({
-      document: SUBSCRIBE_MESSAGES_FOR_ROOM,
-      variables: { roomId: id },
-      updateQuery(prev, { subscriptionData }) {
-        if (!subscriptionData.data) return
-
-        return {
-          rooms: prev.rooms.map((room) => {
-            if (room.id !== id) return room
-
-            return {
-              ...room,
-              lastMessage: subscriptionData.data.messageAddedToRoom
-            }
-          })
-        }
-      }
-    })
-
-    return () => unsubscribe()
-  }, [id])
-
+const Room = ({ id, title, lastMessage }) => {
   return (
     <Link
       to={`/room/${id}`}
@@ -126,11 +67,16 @@ const Room = ({ id, title, lastMessage, subscribeToMore }) => {
   )
 }
 
-const RoomList = ({ loading, error, data, subscribeToMore }) => {
+const RoomList = ({ loading, error, data }) => {
 
   if (loading || error) return null
   return data.rooms.map((room) => (
-    <Room key={room.id} id={room.id} title={room.title} lastMessage={room.lastMessage && room.lastMessage.text} subscribeToMore={subscribeToMore} />
+    <Room
+      key={room.id}
+      id={room.id}
+      title={room.title}
+      lastMessage={room.lastMessage && room.lastMessage.text}
+    />
   ))
 }
 
@@ -138,6 +84,7 @@ const Rooms = () => (
   <div className="list-group">
     <Query
       query={GET_ROOMS}
+      pollInterval={500}
     >
       {props => <RoomList {...props} />}
     </Query>
@@ -189,24 +136,8 @@ const Message = ({ user, text }) => (
   </div>
 )
 
-const MessageList = ({ roomId, loading, error, data, subscribeToMore }) => {
+const MessageList = ({ roomId, loading, error, data }) => {
   const lastMessage = useRef()
-
-  useEffect(() => {
-    const unsubscribe = subscribeToMore({
-      document: SUBSCRIBE_MESSAGES_FOR_ROOM,
-      variables: { roomId: parseInt(roomId) },
-      updateQuery: (prev, { subscriptionData }) => {
-        if (!subscriptionData.data) return prev
-
-        return Object.assign({}, prev, {
-          messagesForRoom: [...prev.messagesForRoom, subscriptionData.data.messageAddedToRoom]
-        })
-      }
-    })
-
-    return () => unsubscribe()
-  }, [roomId])
 
   useEffect(() => {
     if (!lastMessage.current) return
@@ -229,6 +160,7 @@ const Messages = ({ roomId }) => {
         <Query
           query={GET_MESSAGES_FOR_ROOM}
           variables={{ roomId: parseInt(roomId) }}
+          pollInterval={500}
         >
           {props => <MessageList roomId={roomId} {...props} />}
         </Query>
