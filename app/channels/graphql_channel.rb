@@ -15,7 +15,7 @@ class GraphqlChannel < ApplicationCable::Channel
       channel: self,
     }
 
-    result = MySchema.execute({
+    result = ChatroomSchema.execute({
       query: query,
       context: context,
       variables: variables,
@@ -38,7 +38,7 @@ class GraphqlChannel < ApplicationCable::Channel
 
   def unsubscribed
     @subscription_ids.each { |sid|
-      MySchema.subscriptions.delete_subscription(sid)
+      ChatroomSchema.subscriptions.delete_subscription(sid)
     }
   end
 

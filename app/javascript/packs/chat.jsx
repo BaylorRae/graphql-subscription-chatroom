@@ -1,9 +1,12 @@
 import React, { useState, useEffect, createContext, useContext, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import { Router, Link } from '@reach/router'
-import ApolloClient from 'apollo-boost'
+import { HttpLink, ApolloLink, InMemoryCache } from 'apollo-boost'
+import { ApolloClient } from 'apollo-client'
 import { ApolloProvider, Query, Mutation } from 'react-apollo'
 import gql from 'graphql-tag'
+import { createConsumer } from '@rails/actioncable';
+import ActionCableLink from 'graphql-ruby-client/subscriptions/ActionCableLink';
 
 const UserContext = createContext({ user: null, updateUser: () => true })
 
@@ -12,7 +15,29 @@ function useUser() {
   return { user, updateUser }
 }
 
-const client = new ApolloClient();
+const cable = createConsumer()
+
+const httpLink = new HttpLink({
+  uri: '/graphql',
+  credentials: 'include'
+});
+
+const hasSubscriptionOperation = ({ query: { definitions } }) => {
+  return definitions.some(
+    ({ kind, operation }) => kind === 'OperationDefinition' && operation === 'subscription'
+  )
+}
+
+const link = ApolloLink.split(
+  hasSubscriptionOperation,
+  new ActionCableLink({cable}),
+  httpLink
+);
+
+const client = new ApolloClient({
+  link,
+  cache: new InMemoryCache()
+});
 
 const GET_ROOMS = gql`
   query {
@@ -41,6 +66,17 @@ const GET_MESSAGES_FOR_ROOM = gql`
   }
 `
 
+const SUBSCRIBE_MESSAGES_FOR_ROOM = gql`
+  subscription ($roomId:Int!) {
+    messageAddedToRoom(roomId:$roomId) {
+      id
+      user
+      text
+      createdAt
+    }
+  }
+`
+
 const ADD_MESSAGE_TO_ROOM = gql`
   mutation ($roomId:Int!, $user:String!, $text:String!) {
     messageCreate(roomId:$roomId, user:$user, text:$text) {
@@ -53,31 +89,57 @@ const ADD_MESSAGE_TO_ROOM = gql`
   }
 `
 
-const Room = ({ id, title, lastMessage }) => (
-  <Link
-    to={`/room/${id}`}
-    getProps={({ isCurrent }) => ({
-      className: isCurrent ? 'list-group-item list-group-item-action bg-primary text-white' : 'list-group-item list-group-item-action bg-dark text-white'
-    })}
-  >
-    <h4>{title}</h4>
-    <span className="text-white-50">{lastMessage}</span>
-  </Link>
-)
+const Room = ({ id, title, lastMessage, subscribeToMore }) => {
+  useEffect(() => {
+    const unsubscribe = subscribeToMore({
+      document: SUBSCRIBE_MESSAGES_FOR_ROOM,
+      variables: { roomId: id },
+      updateQuery(prev, { subscriptionData }) {
+        if (!subscriptionData.data) return
 
-const RoomList = () => (
+        return {
+          rooms: prev.rooms.map((room) => {
+            if (room.id !== id) return room
+
+            return {
+              ...room,
+              lastMessage: subscriptionData.data.messageAddedToRoom
+            }
+          })
+        }
+      }
+    })
+
+    return () => unsubscribe()
+  }, [id])
+
+  return (
+    <Link
+      to={`/room/${id}`}
+      getProps={({ isCurrent }) => ({
+        className: isCurrent ? 'list-group-item list-group-item-action bg-primary text-white' : 'list-group-item list-group-item-action bg-dark text-white'
+      })}
+    >
+      <h4>{title}</h4>
+      <span className="text-white-50">{lastMessage}</span>
+    </Link>
+  )
+}
+
+const RoomList = ({ loading, error, data, subscribeToMore }) => {
+
+  if (loading || error) return null
+  return data.rooms.map((room) => (
+    <Room key={room.id} id={room.id} title={room.title} lastMessage={room.lastMessage && room.lastMessage.text} subscribeToMore={subscribeToMore} />
+  ))
+}
+
+const Rooms = () => (
   <div className="list-group">
     <Query
       query={GET_ROOMS}
-      pollInterval={500}
     >
-      {({ loading, error, data }) => {
-        if (loading || error) return null
-
-        return data.rooms.map((room) => (
-          <Room key={room.id} id={room.id} title={room.title} lastMessage={room.lastMessage && room.lastMessage.text} />
-        ))
-      }}
+      {props => <RoomList {...props} />}
     </Query>
   </div>
 )
@@ -127,35 +189,48 @@ const Message = ({ user, text }) => (
   </div>
 )
 
-const MessageList = ({ roomId }) => {
-  const lastMessage = useRef(null)
+const MessageList = ({ roomId, loading, error, data, subscribeToMore }) => {
+  const lastMessage = useRef()
 
-  function scrollToBottom() {
+  useEffect(() => {
+    const unsubscribe = subscribeToMore({
+      document: SUBSCRIBE_MESSAGES_FOR_ROOM,
+      variables: { roomId: parseInt(roomId) },
+      updateQuery: (prev, { subscriptionData }) => {
+        if (!subscriptionData.data) return prev
+
+        return Object.assign({}, prev, {
+          messagesForRoom: [...prev.messagesForRoom, subscriptionData.data.messageAddedToRoom]
+        })
+      }
+    })
+
+    return () => unsubscribe()
+  }, [roomId])
+
+  useEffect(() => {
     if (!lastMessage.current) return
-
     lastMessage.current.scrollIntoView({ behavior: 'smooth' })
-  }
+  }, [(data.messagesForRoom || []).map(m => m.id)])
 
-  useEffect(scrollToBottom, [roomId])
+  if (loading || error) return null
 
+  return (data.messagesForRoom || []).map((message) => (
+    <div key={message.id} ref={lastMessage}>
+      <Message user={message.user} text={message.text} />
+    </div>
+  ))
+}
+
+const Messages = ({ roomId }) => {
   return (
     <div className="d-flex flex-column h-100">
       <div className="flex-grow-1 overflow-auto p-3 bg-light">
         <Query
           query={GET_MESSAGES_FOR_ROOM}
           variables={{ roomId: parseInt(roomId) }}
-          pollInterval={500}
-          onCompleted={scrollToBottom}
         >
-          {({ loading, error, data }) => {
-            if (loading || error) return null
-
-            return (data.messagesForRoom || []).map((message) => (
-              <div key={message.id} ref={lastMessage}>
-                <Message user={message.user} text={message.text} />
-              </div>
-            ))
-          }}
+          {props => <MessageList roomId={roomId} {...props} />}
         </Query>
       </div>
 
@@ -197,12 +272,12 @@ const App = () => {
 
           <div className="row border rounded" style={{height: 600}}>
             <div className="col-3 h-100 overflow-auto px-0 bg-dark">
-              <RoomList />
+              <Rooms />
             </div>
 
             <div className="col-9 px-0 h-100">
               <Router className="h-100">
-                <MessageList path="/room/:roomId" />
+                <Messages path="/room/:roomId" />
               </Router>
             </div>
           </div>
