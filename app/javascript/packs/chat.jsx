@@ -1,4 +1,4 @@
-import React, { useState, createContext, useContext } from 'react'
+import React, { useState, useEffect, createContext, useContext, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import { Router, Link } from '@reach/router'
 import ApolloClient from 'apollo-boost'
@@ -67,7 +67,10 @@ const Room = ({ id, title, lastMessage }) => (
 
 const RoomList = () => (
   <div className="list-group">
-    <Query query={GET_ROOMS}>
+    <Query
+      query={GET_ROOMS}
+      pollInterval={500}
+    >
       {({ loading, error, data }) => {
         if (loading || error) return null
 
@@ -124,23 +127,42 @@ const Message = ({ user, text }) => (
   </div>
 )
 
-const MessageList = ({ roomId }) => (
-  <div className="d-flex flex-column h-100">
-    <div className="flex-grow-1 overflow-auto p-3 bg-light">
-      <Query query={GET_MESSAGES_FOR_ROOM} variables={{ roomId: parseInt(roomId) }}>
-        {({ loading, error, data }) => {
-          if (loading || error) return null
+const MessageList = ({ roomId }) => {
+  const lastMessage = useRef(null)
 
-          return (data.messagesForRoom || []).map((message) => (
-            <Message key={message.id} user={message.user} text={message.text} />
-          ))
-        }}
-      </Query>
+  function scrollToBottom() {
+    if (!lastMessage.current) return
+
+    lastMessage.current.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  useEffect(scrollToBottom, [roomId])
+
+  return (
+    <div className="d-flex flex-column h-100">
+      <div className="flex-grow-1 overflow-auto p-3 bg-light">
+        <Query
+          query={GET_MESSAGES_FOR_ROOM}
+          variables={{ roomId: parseInt(roomId) }}
+          pollInterval={500}
+          onCompleted={scrollToBottom}
+        >
+          {({ loading, error, data }) => {
+            if (loading || error) return null
+
+            return (data.messagesForRoom || []).map((message) => (
+              <div key={message.id} ref={lastMessage}>
+                <Message user={message.user} text={message.text} />
+              </div>
+            ))
+          }}
+        </Query>
+      </div>
+
+      <NewMessageForm roomId={roomId} />
     </div>
-
-    <NewMessageForm roomId={roomId} />
-  </div>
-)
+  )
+}
 
 const UserInput = () => {
   const { user, updateUser } = useUser()
@@ -174,11 +196,11 @@ const App = () => {
           </div>
 
           <div className="row border rounded" style={{height: 600}}>
-            <div className="col-md-3 h-100 overflow-auto px-0 bg-dark">
+            <div className="col-3 h-100 overflow-auto px-0 bg-dark">
               <RoomList />
             </div>
 
-            <div className="col-md-9 px-0 h-100">
+            <div className="col-9 px-0 h-100">
               <Router className="h-100">
                 <MessageList path="/room/:roomId" />
               </Router>
