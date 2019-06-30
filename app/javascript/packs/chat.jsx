@@ -127,10 +127,10 @@ const NewMessageForm = ({ roomId }) => {
 
 const Message = ({ user, text }) => (
   <div className="row border-top py-3">
-    <div className="col-md-2 text-secondary text-right">
+    <div className="col-2 text-secondary text-right">
       {user}
     </div>
-    <div className="col-md-10">
+    <div className="col-10">
       {text}
     </div>
   </div>
